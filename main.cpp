@@ -6,6 +6,7 @@
 */
 
 /// KNOWN BUGS
+/// waiKey, imshow, inRange, too much cv::Mat, limit Drawing and waitKey to e.g. every 10th frame
 
 #include "beetle.h"
 
@@ -162,10 +163,11 @@ while(key != 'q')
     cv::inRange( hsv, min, max, threshold_frame);
     /// Do some cleaning
     /// Create a structuring erode element
-    cv::Mat erode_element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2 * erosion_size + 1, 2 * erosion_size + 1), cv::Point(erosion_size, erosion_size) );
+	// MORPH_RECT is said to be faster!
+    cv::Mat erode_element = getStructuringElement(cv::MORPH_RECT, cv::Size(2 * erosion_size + 1, 2 * erosion_size + 1), cv::Point(erosion_size, erosion_size) );
     cv::erode(threshold_frame,threshold_frame,erode_element);
     /// Create a structuring dilation element
-    cv::Mat dilate_element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2 * dilation_size + 1, 2 * dilation_size + 1), cv::Point(dilation_size, dilation_size) );
+    cv::Mat dilate_element = getStructuringElement(cv::MORPH_RECT, cv::Size(2 * dilation_size + 1, 2 * dilation_size + 1), cv::Point(dilation_size, dilation_size) );
     cv::dilate(threshold_frame,threshold_frame,dilate_element);
     cv::dilate(threshold_frame,threshold_frame,dilate_element);
     cv::dilate(threshold_frame,threshold_frame,dilate_element);
@@ -269,11 +271,11 @@ while(key != 'q')
         mod = new_mod;
         ///Cleaning up the detected changed pixels with erosion and dilation
         /// Create a structuring erode element
-        cv::Mat erode_element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2 * erosion_size + 1, 2 * erosion_size + 1), cv::Point(erosion_size, erosion_size) );
+        //cv::Mat erode_element = getStructuringElement(cv::MORPH_RECT, cv::Size(2 * erosion_size + 1, 2 * erosion_size + 1), cv::Point(erosion_size, erosion_size) );
         cv::erode(mod,mod,erode_element);
         cv::erode(mod,mod,erode_element);
         /// Create a structuring dilation element
-        cv::Mat dilate_element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2 * dilation_size + 1, 2 * dilation_size + 1), cv::Point(dilation_size, dilation_size) );
+        //cv::Mat dilate_element = getStructuringElement(cv::MORPH_RECT, cv::Size(2 * dilation_size + 1, 2 * dilation_size + 1), cv::Point(dilation_size, dilation_size) );
         cv::dilate(mod,mod,dilate_element);
         cv::dilate(mod,mod,dilate_element);
         cv::dilate(mod,mod,dilate_element);
