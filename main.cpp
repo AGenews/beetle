@@ -7,6 +7,7 @@
 
 /// KNOWN BUGS
 /// waiKey, imshow, inRange, too much cv::Mat, limit Drawing and waitKey to e.g. every 10th frame
+// ALL variable definitions out of the loop!
 
 #include "beetle.h"
 
