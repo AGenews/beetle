@@ -1,669 +1,38 @@
 /*  ####################################################
-    This is a minimal example to start capturing frames
-    from a PointGrey BlackFly Camera using Flycapture2
-    on Linux. It is based on Kevin Hughes script:
-    https://gist.github.com/kevinhughes27/5543668
-    But it lacks all eroor handling to make the script
-    slick and understandable.
-
+    This little app allows the user to detect two moving
+    objects. An orange beetle as well as a dark/light mouse.
     AndreasGenewsky (2016)
     ####################################################
 */
 
-
 /// KNOWN BUGS
-/// (1) The Temporal performance is still weak, which was tobe expected as nothing was time optimized.
-///     We start with cleaning up
-/// (2) as it turns out ... resizing causes a dramatic decrease in performance
 
-/// (3) Moreover we have no idea when a frame has been captured, thats why we need Software Triggering
-///     This will all cause the framerate to drop, but idealy we have something like 40Hz aka 25 ms bins
-
-#include "flycapture/FlyCapture2.h"
-#include <opencv2/core.hpp>
-#include "opencv2/imgcodecs.hpp"
-#include "opencv2/imgproc.hpp"
-#include <opencv2/highgui.hpp>
-#include "opencv2/videoio.hpp"
-#include <opencv2/video.hpp>
-#include <opencv2/features2d.hpp>
-#include <iostream>
-#include <stdio.h>
-#include <time.h>
-#include <ctime>
-#include "stdio.h"
-#include <sstream>
-#include <string>
-#include <unistd.h>
-#include <sys/time.h>
-namespace patch
-{
-    template < typename T > std::string to_string( const T& n )
-    {
-        std::ostringstream stm ;
-        stm << n ;
-        return stm.str() ;
-    }
-}
-#include <iostream>
-
-#include <iomanip>
-
+#include "beetle.h"
 
 using namespace FlyCapture2;
 using namespace std;
-cv::Mat image, background,background_gray, mod, gray, color, thresh, thresh2, fgmask, bgmask, bgmask2, colored_gray, combined, combined2, blobs, threshold_frame, gray_ori, gray_contrast, contrast_thresh, hsv, test;
-const char* src_window = "Bettle";
-int drag = 0, select_flag = 0, background_flag = 0, get_background = 0, recording_flag = 0, blobs_flag = 0, minTargetRadius = 5, beetle_flag = 0, object_flag = 0;
-int auto_exposure_flag = 0, auto_gn_flag = 0, auto_shtr_flag = 0;
-int erosion_size = 2, dilation_size = 2;
-int animal_color = 255;
-const Mode k_fmt7Mode = MODE_2;
-const PixelFormat k_fmt7PixFmt = PIXEL_FORMAT_RAW8;
-bool enableRadiusCulling = false;
-bool grid_flag = false;
 
-std::vector<cv::KeyPoint> keypoints;
-std::vector<vector<cv::Point> > object_contours;
-std::vector<vector<cv::Point> > beetle_contours;
-std::vector<cv::Vec4i> hierarchy;
-std::vector<cv::Point> approxShape;
+uint64_t prev_time_value, time_value;
+uint64_t time_diff;
 
-//std::vector<vector<cv::Point> > contours;
-std::vector<cv::Vec4i> heirarchy;
-std::vector<cv::Point2i> center;
-std::vector<int> radius;
-int largest_beetle_area=0;
-int largest_beetle_index=0;
-int largest_object_area=0;
-int largest_object_index=0;
+uint64_t interval = 10000;  /// in microseconds
 
-int samplingintervall = 25000;  /// in microseconds
-
-cv::RNG rng(12345);
-
-
-cv::Point2i point1, point2, placeholder;
-bool callback = false;
-void PrintError(const Error error) { error.PrintErrorTrace(); }
-void mouseHandler(int event, int x, int y, int flags, void* param)
+uint64_t get_posix_clock_time ()
 {
-    if (event == CV_EVENT_LBUTTONDOWN && !drag && !select_flag)
-    {
-        /* left button clicked. ROI selection begins */
-        point1 = cv::Point(x, y);
-        drag = 1;
-    }
+    struct timespec ts;
 
-    if (event == CV_EVENT_MOUSEMOVE && drag && !select_flag)
-    {
-        /* mouse dragged. ROI being selected */
-        cv::Mat img1 = image.clone();
-        point2 = cv::Point(x, y);
-        cv::rectangle(img1, point1, point2, CV_RGB(255, 0, 0), 2, 8, 0);
-        cv::imshow(src_window, img1);
-    }
-
-    if (event == CV_EVENT_LBUTTONUP && drag && !select_flag)
-    {
-        cv::Mat img2 = image.clone();
-        point2 = cv::Point(x, y);
-        drag = 0;
-        select_flag = 1;
-        cv::imshow(src_window, img2);
-        callback = true;
-        /// Here we need to make the comparison
-        if( (point1.x>point2.x) || (point1.y>point2.y) ){
-        placeholder = point1;
-        point1 = point2;
-        point2 = placeholder;
-        }
-
-    }
+    if (clock_gettime (CLOCK_MONOTONIC, &ts) == 0)
+        return (uint64_t) (ts.tv_sec * 1000000 + ts.tv_nsec / 1000);
+    else
+        return 0;
 }
-
-void PrintBuildInfo()
-{
-	FC2Version fc2Version;
-	Utilities::GetLibraryVersion( &fc2Version );
-
-	ostringstream version;
-	version << "FlyCapture2 library version: " << fc2Version.major << "." << fc2Version.minor << "." << fc2Version.type << "." << fc2Version.build;
-	cout << version.str() << endl;
-
-	ostringstream timeStamp;
-	timeStamp << "Application build date: " << __DATE__ << " " << __TIME__;
-	cout << timeStamp.str() << endl << endl;
-}
-
-void PrintCameraInfo( CameraInfo* pCamInfo )
-{
-	cout << endl;
-	cout << "*** CAMERA INFORMATION ***" << endl;
-	cout << "Serial number -" << pCamInfo->serialNumber << endl;
-	cout << "Camera model - " << pCamInfo->modelName << endl;
-	cout << "Camera vendor - " << pCamInfo->vendorName << endl;
-	cout << "Sensor - " << pCamInfo->sensorInfo << endl;
-	cout << "Resolution - " << pCamInfo->sensorResolution << endl;
-	cout << "Firmware version - " << pCamInfo->firmwareVersion << endl;
-	cout << "Firmware build time - " << pCamInfo->firmwareBuildTime << endl << endl;
-
-
-}
-
-void PrintFormat7Capabilities( Format7Info fmt7Info )
-{
-	cout << "Max image pixels: (" << fmt7Info.maxWidth << ", " << fmt7Info.maxHeight << ")" << endl;
-	cout << "Image Unit size: (" << fmt7Info.imageHStepSize << ", " << fmt7Info.imageVStepSize << ")" << endl;
-	cout << "Offset Unit size: (" << fmt7Info.offsetHStepSize << ", " << fmt7Info.offsetVStepSize << ")" << endl;
-	cout << "Pixel format bitfield: 0x" << fmt7Info.pixelFormatBitField << endl;
-}
-
-bool CheckSoftwareTriggerPresence( Camera* pCam )
-{
-	const unsigned int k_triggerInq = 0x530;
-
-	Error error;
-	unsigned int regVal = 0;
-
-	error = pCam->ReadRegister( k_triggerInq, &regVal );
-
-	if (error != PGRERROR_OK)
-	{
-		PrintError( error );
-		return false;
-	}
-
-	if( ( regVal & 0x10000 ) != 0x10000 )
-	{
-		return false;
-	}
-
-	return true;
-}
-
-bool PollForTriggerReady( Camera* pCam )
-{
-	const unsigned int k_softwareTrigger = 0x62C;
-	Error error;
-	unsigned int regVal = 0;
-
-	do
-	{
-		error = pCam->ReadRegister( k_softwareTrigger, &regVal );
-		if (error != PGRERROR_OK)
-		{
-			PrintError( error );
-			return false;
-		}
-
-	} while ( (regVal >> 31) != 0 );
-
-	return true;
-}
-
-bool FireSoftwareTrigger( Camera* pCam )
-{
-	const unsigned int k_softwareTrigger = 0x62C;
-	const unsigned int k_fireVal = 0x80000000;
-	Error error;
-
-	error = pCam->WriteRegister( k_softwareTrigger, k_fireVal );
-	if (error != PGRERROR_OK)
-	{
-		PrintError( error );
-		return false;
-	}
-
-	return true;
-}
-
-void callbackButton(int, void*){
-    cout << "click" << endl;
-}
-void cb_auto_exp_ON(int, void*){
-    auto_exposure_flag = 1;
-}
-void cb_auto_exp_OFF(int, void*){
-    auto_exposure_flag = 0;
-}
-void cb_auto_gn_ON(int, void*){
-    auto_gn_flag = 1;
-}
-void cb_auto_gn_OFF(int, void*){
-    auto_gn_flag = 0;
-}
-void cb_auto_shtr_ON(int, void*){
-    auto_shtr_flag = 1;
-}
-void cb_auto_shtr_OFF(int, void*){
-    auto_shtr_flag = 0;
-    }
-
 
 int main(int /*argc*/, char** /*argv*/)
 {
-Camera cam;
-Error error;
-BusManager busMgr;
-unsigned int numCameras;
-error = busMgr.GetNumOfCameras(&numCameras);
-if (error != PGRERROR_OK)
-{
-    PrintError( error );
-	return -1;
-}
-cout << "Number of cameras detected: " << numCameras << endl;
-if ( numCameras < 1 )
-{
-    cout << "Insufficient number of cameras... exiting" << endl;
-	return -1;
-}
-
-PGRGuid guid;
-error = busMgr.GetCameraFromIndex(0, &guid);
-if (error != PGRERROR_OK)
-{
-    PrintError( error );
-	return -1;
-}
-
-/// Connect to a camera
-error = cam.Connect(&guid);
-if (error != PGRERROR_OK)
-{
-	PrintError( error );
-	return -1;
-}
-
-/// Power on the camera
-const unsigned int k_cameraPower = 0x610;
-const unsigned int k_powerVal = 0x80000000;
-error  = cam.WriteRegister( k_cameraPower, k_powerVal );
-if (error != PGRERROR_OK)
-{
-    PrintError( error );
-	return -1;
-}
-
-const unsigned int millisecondsToSleep = 100;
-unsigned int regVal = 0;
-unsigned int retries = 10;
-
-/// Wait for camera to complete power-up
-do
-{
-#if defined(_WIN32) || defined(_WIN64)
-    Sleep(millisecondsToSleep);
-#elif defined(LINUX)
-	struct timespec nsDelay;
-	nsDelay.tv_sec = 0;
-	nsDelay.tv_nsec = (long)millisecondsToSleep * 1000000L;
-	nanosleep(&nsDelay, NULL);
-#endif
-	error = cam.ReadRegister(k_cameraPower, &regVal);
-	if (error == PGRERROR_TIMEOUT)
-	{
-	// ignore timeout errors, camera may not be responding to
-	// register reads during power-up
-	}
-	else if (error != PGRERROR_OK)
-	{
-			PrintError( error );
-			return -1;
-	}
-
-	retries--;
-} while ((regVal & k_powerVal) == 0 && retries > 0);
-
-/// Check for timeout errors after retrying
-if (error == PGRERROR_TIMEOUT)
-{
-    PrintError( error );
-    return -1;
-}
-
-
-/// Get the camera information
-CameraInfo camInfo;
-error = cam.GetCameraInfo(&camInfo);
-if (error != PGRERROR_OK)
-{
-	PrintError( error );
-	return -1;
-}
-
-PrintCameraInfo(&camInfo);
-
-#ifndef SOFTWARE_TRIGGER_CAMERA
-/// Check for external trigger support
-TriggerModeInfo triggerModeInfo;
-error = cam.GetTriggerModeInfo( &triggerModeInfo );
-if (error != PGRERROR_OK)
-{
-	PrintError( error );
-	return -1;
-}
-
-if ( triggerModeInfo.present != true )
-{
-	cout << "Camera does not support external trigger! Exiting..." << endl;
-	return -1;
-}
-#endif
-
-///Setting Strobe Output to Strobe at every Frame
-StrobeControl mStrobe;
-mStrobe.source = 1;
-mStrobe.onOff = true;
-mStrobe.polarity = 1;
-mStrobe.delay = 0;
-mStrobe.duration = 1.0f;
-cam.SetStrobe(&mStrobe);
-
-/// Get current trigger settings
-TriggerMode triggerMode;
-error = cam.GetTriggerMode( &triggerMode );
-if (error != PGRERROR_OK)
-{
-	PrintError( error );
-	return -1;
-}
-
-/// Set camera to trigger mode 0
-triggerMode.onOff = true;
-triggerMode.mode = 0;
-triggerMode.parameter = 0;
-
-#ifdef SOFTWARE_TRIGGER_CAMERA
-	// A source of 7 means software trigger
-	triggerMode.source = 7;
-#else
-	// Triggering the camera externally using source 0.
-	triggerMode.source = 0;
-#endif
-
-	error = cam.SetTriggerMode( &triggerMode );
-	if (error != PGRERROR_OK)
-	{
-		PrintError( error );
-		return -1;
-	}
-
-/// Poll to ensure camera is ready
-bool retVal = PollForTriggerReady( &cam );
-if( !retVal )
-{
-	cout << endl;
-	cout << "Error polling for trigger ready!" << endl;
-	return -1;
-}
-
-
-
-
-/// Query for available Format 7 modes
-Format7Info fmt7Info;
-bool supported;
-fmt7Info.mode = k_fmt7Mode;
-error = cam.GetFormat7Info( &fmt7Info, &supported );
-if (error != PGRERROR_OK)
-{
-	PrintError( error );
-	return -1;
-}
-
-PrintFormat7Capabilities( fmt7Info );
-if ( (k_fmt7PixFmt & fmt7Info.pixelFormatBitField) == 0 )
-{
-/// Pixel format not supported!
-	cout << "Pixel format is not supported" << endl;
-	return -1;
-}
-
-Format7ImageSettings fmt7ImageSettings;
-fmt7ImageSettings.mode = k_fmt7Mode;
-fmt7ImageSettings.offsetX = 0;
-fmt7ImageSettings.offsetY = 0;
-fmt7ImageSettings.width = fmt7Info.maxWidth;
-fmt7ImageSettings.height = fmt7Info.maxHeight;
-fmt7ImageSettings.pixelFormat = k_fmt7PixFmt;
-
-bool valid;
-Format7PacketInfo fmt7PacketInfo;
-
-/// Validate the settings to make sure that they are valid
-error = cam.ValidateFormat7Settings(&fmt7ImageSettings, &valid, &fmt7PacketInfo );
-if (error != PGRERROR_OK)
-{
-	PrintError( error );
-	return -1;
-}
-if ( !valid )
-{
-/// Settings are not valid
-	cout << "Format7 settings are not valid" << endl;
-	return -1;
-}
-
-/// Set the settings to the camera
-error = cam.SetFormat7Configuration(&fmt7ImageSettings, fmt7PacketInfo.recommendedBytesPerPacket );
-if (error != PGRERROR_OK)
-{
-	PrintError( error );
-	return -1;
-}
-
-/// Get the camera configuration
-FC2Config config;
-error = cam.GetConfiguration( &config );
-if (error != PGRERROR_OK)
-{
-	PrintError( error );
-	return -1;
-}
-
-/// Set the grab timeout to 5 seconds
-config.grabTimeout = 50;
-
-/// Set the camera configuration
-error = cam.SetConfiguration( &config );
-if (error != PGRERROR_OK)
-{
-	PrintError( error );
-	return -1;
-}
-
-/// Camera is ready, start capturing images
-error = cam.StartCapture();
-if (error != PGRERROR_OK)
-{
-	PrintError( error );
-	return -1;
-}
-
-#ifdef SOFTWARE_TRIGGER_CAMERA
-if (!CheckSoftwareTriggerPresence( &cam ))
-{
-	cout << "SOFT_ASYNC_TRIGGER not implemented on this camera!  Stopping application" << endl ;
-	return -1;
-}
-#else
-	cout << "Trigger the camera by sending a trigger pulse to GPIO" << triggerMode.source << endl;
-
-#endif
-
-
-/*
-/// Start capturing images
-error = cam.StartCapture();
-if (error != PGRERROR_OK)
-{
-	PrintError( error );
-	return -1;
-}
-*/
-
-/// FRAME RATE
-Property frmRate;
-frmRate.type = FRAME_RATE;
-error = cam.GetProperty( &frmRate );
-if (error != PGRERROR_OK)
-{
-	PrintError( error );
-	return -1;
-}
-frmRate.autoManualMode = false;
-frmRate.absControl = true;
-frmRate.absValue = 60.0; // you may set to your desired fixed frame rate
-error = cam.SetProperty(&frmRate);
-if (error != PGRERROR_OK)
-{
-    PrintError(error);
-    return -1;
-}
-//cout << "Frame rate is " << fixed << setprecision(2) << frmRate.absValue << " fps" << endl;
-
-/// AUTO_EXPOSURE
-Property autoexp;
-autoexp.type = AUTO_EXPOSURE;
-error = cam.GetProperty( &autoexp );
-if (error != PGRERROR_OK)
-{
-	PrintError( error );
-	return -1;
-}
-autoexp.autoManualMode = false;
-autoexp.absControl = true;
-autoexp.absValue = 1.0;
-error = cam.SetProperty(&autoexp);
-if (error != PGRERROR_OK)
-{
-    PrintError(error);
-    return -1;
-}
-
-//cout << "EXPOSURE is set to " << fixed << setprecision(2) << autoexp.absValue << " EV"<< endl;
-
-/// SHUTTER
-Property shtr;
-shtr.type = SHUTTER;
-error = cam.GetProperty( &shtr );
-if (error != PGRERROR_OK)
-{
-    PrintError( error );
-    return -1;
-}
-shtr.autoManualMode = false;
-shtr.absControl = true;
-shtr.absValue = 15.0;
-error = cam.SetProperty(&shtr);
-if (error != PGRERROR_OK)
-{
-    PrintError(error);
-    return -1;
-}
-
-//cout << "SHUTTER is set to " << fixed << setprecision(2) << shtr.absValue << " ms"<< endl;
-
-/// GAIN
-Property gn;
-gn.type = GAIN;
-error = cam.GetProperty( &gn );
-if (error != PGRERROR_OK)
-{
-	PrintError( error );
-	return -1;
-}
-gn.autoManualMode = false;
-gn.absControl = true;
-gn.absValue = 5.0;
-error = cam.SetProperty(&gn);
-if (error != PGRERROR_OK)
-{
-    PrintError(error);
-    return -1;
-}
-
-//cout << "GAIN is set to " << fixed << setprecision(2) << gn.absValue << " dB"<< endl;
-/*
-StrobeControl mStrobe;
-mStrobe.source = 1;
-mStrobe.onOff = false;
-mStrobe.polarity = 1;
-mStrobe.delay = 0;
-mStrobe.duration = 1.0f;
-cam.SetStrobe(&mStrobe);
-*/
-
-
-/// Initialize values
-int lthreshval = 60;
-int min_contour_m = 75;
-int max_contour_m = 1000;
-int exp_val = 1;
-int gn_val = 5;
-int shtr_val = 15;
-
-/// MOUSE
-int hue_min_m = 100;
-int sat_min_m = 0;
-int vol_min_m = 0;
-int hue_max_m = 165;
-int sat_max_m = 360;
-int vol_max_m = 360;
-int min_contrast = 30;
-
-/// BEETLE
-int hue_min_b = 0;
-int sat_min_b = 45;
-int vol_min_b = 45;
-int hue_max_b = 25;
-int sat_max_b = 360;
-int vol_max_b = 360;
-int beetle_contrast = 5;
-int beetle_size = 5;
-int min_contour_b = 125;
-int max_contour_b = 250;
-
-cv::namedWindow(src_window, CV_GUI_EXPANDED);
-cv::setMouseCallback(src_window,mouseHandler,0);
-//cv::createButton(nameb1,callbackButton,nameb1,CV_CHECKBOX,0);
-//cvCreateButton(nameb2,callbackButton,nameb2,CV_CHECKBOX,0);
-cvCreateTrackbar( "Exposure", NULL, &exp_val, 50, NULL);
-cvCreateButton("Auto Exposure OFF",cb_auto_exp_OFF,NULL,CV_RADIOBOX,0);
-cvCreateButton("Auto Exposure ON",cb_auto_exp_ON,NULL,CV_RADIOBOX,1);
-cvCreateTrackbar( "Gain", NULL, &gn_val, 25, NULL);
-cvCreateButton("Auto Gain OFF",cb_auto_gn_OFF,NULL,CV_RADIOBOX,0);
-cvCreateButton("Auto Gain ON",cb_auto_gn_ON,NULL,CV_RADIOBOX,1);
-cvCreateTrackbar( "Shutter", NULL, &shtr_val, 25, NULL);
-cvCreateButton("Auto Shutter OFF",cb_auto_shtr_OFF,NULL,CV_RADIOBOX,0);
-cvCreateButton("Auto Shutter ON",cb_auto_shtr_ON,NULL,CV_RADIOBOX,1);
-
-cvCreateTrackbar( "HUE_min_B", NULL, &hue_min_b, 360, NULL);
-cvCreateTrackbar( "SAT_min_B", NULL, &sat_min_b, 360, NULL);
-cvCreateTrackbar( "VOL_min_B", NULL, &vol_min_b, 360, NULL);
-cvCreateTrackbar( "HUE_max_B", NULL, &hue_max_b, 360, NULL);
-cvCreateTrackbar( "SAT_max_B", NULL, &sat_max_b, 360, NULL);
-cvCreateTrackbar( "VOL_max_B", NULL, &vol_max_b, 360, NULL);
-cvCreateTrackbar( "MinContour_B", NULL, &min_contour_b, 500, NULL);
-cvCreateTrackbar( "MaxContour_B", NULL, &max_contour_b, 1000, NULL);
-cvCreateTrackbar( "Beetle Contrast", NULL, &beetle_contrast, 255, NULL);
-cvCreateTrackbar( "Beetle Size", NULL, &beetle_size, 100, NULL);
-
-
-/// Create Trackbars
-cv::createTrackbar( "Sensitivity", src_window, &lthreshval, 255, NULL);
-cv::createTrackbar( "MinContour_M", src_window, &min_contour_m, 5000, NULL);
-cv::createTrackbar( "MaxContour_M", src_window, &max_contour_m, 5000, NULL);
-cv::createTrackbar( "HUE_min_M", src_window, &hue_min_m, 360, NULL);
-cv::createTrackbar( "SAT_min_M", src_window, &sat_min_m, 360, NULL);
-cv::createTrackbar( "VOL_min_M", src_window, &vol_min_m, 360, NULL);
-cv::createTrackbar( "HUE_max_M", src_window, &hue_max_m, 360, NULL);
-cv::createTrackbar( "SAT_max_M", src_window, &sat_max_m, 360, NULL);
-cv::createTrackbar( "VOL_max_M", src_window, &vol_max_m, 360, NULL);
-cv::createTrackbar( "Contrast",src_window, &min_contrast, 255, NULL);
-
+/// Setting up the Camera
+camera_setup();
+/// Generate Trackbars and Buttons
+decorate_app_window();
 
 /// ### BENCHMARK STUFF
 long frameCounter = 0;
@@ -671,16 +40,22 @@ std::time_t timeBegin = std::time(0);
 int tick = 0;
 /// ###
 
-
-
 char key = '0';
 
-
-struct timeval start_t, end_t;
-gettimeofday(&start_t, NULL);
+prev_time_value = get_posix_clock_time ();
 
 while(key != 'q')
     {
+    time_value = get_posix_clock_time ();
+    time_diff = time_value - prev_time_value;
+    if(time_diff<=interval){
+    continue;
+    }
+    //cout << time_diff <<endl;
+    prev_time_value = get_posix_clock_time ();
+    time_diff = time_value - prev_time_value;
+
+
     if(key == 's'){
     recording_flag = 1;
     mStrobe.onOff = true;
@@ -699,18 +74,13 @@ while(key != 'q')
     timeinfo = localtime (&rawtime);
     strftime(buffer,80,"%c",timeinfo);
 
-    if(key == 'd'){
-        select_flag = 0;
-    }
+    if(key == 'd'){select_flag = 0;}
 
-    if(key == 'g'){
-        grid_flag = !grid_flag;
-    }
+    if(key == 'g'){grid_flag = !grid_flag;}
 
     if(auto_exposure_flag == 1){
         autoexp.autoManualMode = true;
         autoexp.absControl = false;
-        //autoexp.absValue = 1.0;
         cam.SetProperty(&autoexp);
      }
     if(auto_exposure_flag == 0){
@@ -722,7 +92,6 @@ while(key != 'q')
     if(auto_gn_flag == 1){
         gn.autoManualMode = true;
         gn.absControl = false;
-        //gn.absValue = 5.0;
         cam.SetProperty(&gn);
     }
     if(auto_gn_flag == 0){
@@ -743,44 +112,21 @@ while(key != 'q')
         cam.SetProperty(&shtr);
     }
 
-
     Image rawImage;
-//#ifdef SOFTWARE_TRIGGER_CAMERA
-    /// Check that the trigger is ready
+/// Check that the trigger is ready
 	PollForTriggerReady( &cam);
-//	cout << "Press the Enter key to initiate a software trigger" << endl;
-//	cin.ignore();
 
 /// Time Sensitive Loop
 /// Here we basically put our frame rate limiter
-    gettimeofday(&end_t, NULL);
-    if( (end_t.tv_usec-start_t.tv_usec)<samplingintervall){
-    continue;
-    }
-    else{
-    gettimeofday(&start_t, NULL);
-    }
 
 
 	/// Fire software trigger
 	bool retVal = FireSoftwareTrigger( &cam );
-	if ( !retVal )
-	{
-        cout << endl;
-		cout << "Error firing software trigger" << endl;
-
-		return -1;
-    }
-//#endif
-    //continue;
+	if ( !retVal ){cout << "Error firing software trigger" << endl;}
 
 	/// Grab image
 	error = cam.RetrieveBuffer( &rawImage );
-	if (error != PGRERROR_OK)
-	{
-		PrintError( error );
-		break;
-	}
+	if (error != PGRERROR_OK){PrintError( error );break;}
 
     /// convert to rgb
     Image rgbImage;
@@ -788,9 +134,6 @@ while(key != 'q')
     /// convert to OpenCV Mat
     unsigned int rowBytes = (double)rgbImage.GetReceivedDataSize()/(double)rgbImage.GetRows();
     color = cv::Mat(rgbImage.GetRows(), rgbImage.GetCols(), CV_8UC3, rgbImage.GetData(),rowBytes);
-//  if(k_fmt7Mode == MODE_3){
-//    cv::resize(color, color, cv::Size(color.cols*2, color.rows*2), cv::INTER_NEAREST);
-//    }
     cv::cvtColor(color.clone(), gray, CV_BGR2GRAY);
     image = color;
     ///BACKGROUND
@@ -837,13 +180,13 @@ while(key != 'q')
     ///Get rid of contours which are either too small or too huge
     for (vector<vector<cv::Point> >::iterator it = beetle_contours.begin(); it!=beetle_contours.end(); )
     {
-        if ( (it->size()<min_contour_b) || (it->size()>max_contour_b) )
+        if ( (it->size()<unsigned(min_contour_b)) || (it->size()>unsigned(max_contour_b)) )
             it=beetle_contours.erase(it);
         else
             ++it;
     }
     /// Look for the largest contour and rember that index
-    for( int i = 0; i<beetle_contours.size(); i++ ) // iterate through each contour.
+    for( unsigned int i = 0; i<beetle_contours.size(); i++ ) // iterate through each contour.
     {
         double a=contourArea( beetle_contours[i],false);  //  Find the area of contour
         if(a>largest_beetle_area){
@@ -859,18 +202,16 @@ while(key != 'q')
         beetle_flag = 0;
     }
 
-
     /// Get the moments
     vector<cv::Moments> mub(beetle_contours.size() );
-    for( int i = 0; i < beetle_contours.size(); i++ )
+    for( unsigned int i = 0; i < beetle_contours.size(); i++ )
     {
         mub[i] = moments( beetle_contours[i], false );
     }
 
-
     ///  Get the mass centers:
     vector<cv::Point2f> mcb( beetle_contours.size() );
-    for( int i = 0; i < beetle_contours.size(); i++ )
+    for( unsigned int i = 0; i < beetle_contours.size(); i++ )
     {
         mcb[i] = cv::Point2f( mub[i].m10/mub[i].m00 , mub[i].m01/mub[i].m00 );
     }
@@ -980,30 +321,22 @@ while(key != 'q')
 
         ///Find our lovely HSV objects
         cv::inRange( combined, min, max, threshold_frame);
-        //erode_element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2 * erosion_size + 1, 2 * erosion_size + 1), cv::Point(erosion_size, erosion_size) );
         cv::erode(threshold_frame,threshold_frame,erode_element);
-        //dilate_element = getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2 * dilation_size + 1, 2 * dilation_size + 1), cv::Point(dilation_size, dilation_size) );
         cv::dilate(threshold_frame,threshold_frame,dilate_element);
-
-        /// I suspect morphologyEx to be quite time consuming.
-        //cv::Mat str_el = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
-        /// Doe some cleaning
-        //cv::morphologyEx(threshold_frame, threshold_frame, cv::MORPH_OPEN, str_el);
-        //cv::morphologyEx(threshold_frame, threshold_frame, cv::MORPH_CLOSE, str_el);
         /// Find contours
         cv::findContours( threshold_frame, object_contours, heirarchy, CV_RETR_TREE, CV_CHAIN_APPROX_NONE);
         ///Get rid of contours which are either too small or too huge
 
         for (vector<vector<cv::Point> >::iterator it = object_contours.begin(); it!=object_contours.end(); )
         {
-            if ( (it->size()<min_contour_m) || (it->size()>max_contour_m) )
+            if ( (it->size()<unsigned(min_contour_m)) || (it->size()>unsigned(max_contour_m)) )
                 it=object_contours.erase(it);
             else
                 ++it;
         }
 
         /// Look for the largest contour and rember that index
-        for( int i = 0; i<object_contours.size(); i++ ) // iterate through each contour.
+        for( unsigned int i = 0; i<object_contours.size(); i++ ) // iterate through each contour.
         {
             double a=contourArea( object_contours[i],false);  //  Find the area of contour
             if(a>largest_object_area){
@@ -1022,13 +355,13 @@ while(key != 'q')
 
         /// Get the moments
         vector<cv::Moments> mum(object_contours.size() );
-        for( int i = 0; i < object_contours.size(); i++ )
+        for( unsigned int i = 0; i < object_contours.size(); i++ )
         {
             mum[i] = moments( object_contours[i], false );
         }
         ///  Get the mass centers:
         vector<cv::Point2f> mcm( object_contours.size() );
-        for( int i = 0; i < object_contours.size(); i++ )
+        for( unsigned int i = 0; i < object_contours.size(); i++ )
         {
             mcm[i] = cv::Point2f( mum[i].m10/mum[i].m00 , mum[i].m01/mum[i].m00 );
         }
@@ -1040,7 +373,7 @@ while(key != 'q')
         /// Lets draw some stuff and calculate the object coordinate also with respect to our rectangle
 
         cv::Point2f object_coordinate, absolute_object;
-        for( int i = 0; i< object_contours.size(); i++ )
+        for( unsigned int i = 0; i< object_contours.size(); i++ )
         {
             absolute_object = mcm[largest_object_index];
             object_coordinate = absolute_object;
@@ -1072,12 +405,12 @@ while(key != 'q')
 
     if(grid_flag == 1){
         int stepSize = 50;
-        int width = image.size().width;
-        int height = image.size().height;
-        for (int i = 0; i<height; i += stepSize){
+        unsigned int width = image.size().width;
+        unsigned int height = image.size().height;
+        for (unsigned int i = 0; i<height; i += stepSize){
             cv::line(image, cv::Point(0, i), cv::Point(width, i), cv::Scalar(255, 204, 0),2,8,0);
         }
-        for (int i = 0; i<width; i += stepSize){
+        for (unsigned int i = 0; i<width; i += stepSize){
         cv::line(image, cv::Point(i, 0), cv::Point(i, height), cv::Scalar(255, 204, 0),2,8,0);
         }
     }
@@ -1104,7 +437,6 @@ while(key != 'q')
     }
     /// ###
 
-    usleep(25*1000);
 
 } /// END of CAPTURING LOOP
 
@@ -1198,4 +530,52 @@ return 0;
             blobs.copyTo(new_blobs,ROI_inv);
             new_blobs.copyTo(blobs);
         }
+*/
+
+/*
+    Camera cam;
+    Error error;
+    BusManager busMgr;
+    PGRGuid guid;
+    StrobeControl mStrobe;
+    CameraInfo camInfo;
+    TriggerModeInfo triggerModeInfo;
+    TriggerMode triggerMode;
+    Format7Info fmt7Info;
+    Format7ImageSettings fmt7ImageSettings;
+    Format7PacketInfo fmt7PacketInfo;
+    Property frmRate;
+    Property autoexp;
+    Property shtr;
+    Property gn;
+
+
+    Camera *ptrCamera;
+    Error *ptrError;
+    BusManager *ptrBusManager;
+    PGRGuid *ptrPGRGuid;
+    StrobeControl *ptrStrobeControl;
+    CameraInfo *ptrCameraInfo;
+    TriggerModeInfo *ptrTriggerModeInfo;
+    TriggerMode *ptrTriggerMode;
+    Format7Info *ptrFormat7Info;
+    Format7ImageSettings *ptrFormat7ImageSettings;
+    Format7PacketInfo *ptrFormat7PacketInfo;
+    Property *ptrFR, *ptrAE, *ptrSHTR, *ptrGN;
+
+    ptrCamera = &cam;
+    ptrError = &error;
+    ptrBusManager = &busMgr;
+    ptrPGRGuid = &guid;
+    ptrStrobeControl = &mStrobe;
+    ptrCameraInfo = &camInfo;
+    ptrTriggerModeInfo = &triggerModeInfo;
+    ptrTriggerMode = &triggerMode;
+    ptrFormat7Info = &fmt7Info;
+    ptrFormat7ImageSettings = &fmt7ImageSettings;
+    ptrFormat7PacketInfo = &fmt7PacketInfo;
+    ptrFR = &frmRate;
+    ptrAE = &autoexp;
+    ptrSHT = &shtr;
+    ptrGN = &gn;
 */
